@@ -2,11 +2,12 @@ import os
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, FloatType
 from pyspark.sql.functions import from_json, col, when, lit, expr
+from pyspark.sql.types import TimestampType
 
-# Initialize Spark Session with Kafka dependency
+# Initialize Spark Session with Kafka and PostgreSQL dependencies
 spark = SparkSession.builder \
     .appName("KafkaSparkConsumer") \
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.postgresql:postgresql:42.5.0") \
     .config("spark.sql.shuffle.partitions", "4") \
     .getOrCreate()
 
@@ -48,7 +49,7 @@ parsed_df = kafka_df.selectExpr("CAST(value AS STRING)") \
 
 # Schema Validation and Flatten
 flattened_df = parsed_df.filter(col("data").isNotNull()).select(
-    col("data.timestamp").alias("timestamp"),
+    col("data.timestamp").cast(TimestampType()).alias("timestamp"),  # Cast to TimestampType
     col("data.sensors.temperature").alias("temperature"),
     col("data.sensors.tds").alias("tds"),
     col("data.sensors.ph").alias("ph"),
@@ -86,11 +87,26 @@ status_df = thresholds_df.withColumn(
          "OR gh_alert = 'ALERT' OR kh_alert = 'ALERT' THEN 'CRITICAL' ELSE 'NORMAL' END")
 )
 
-# Write to Console with Checkpointing
+# PostgreSQL Configuration
+POSTGRES_URL = "jdbc:postgresql://localhost:5432/aquarium_data"
+POSTGRES_USER = "postgres"
+POSTGRES_PASSWORD = "password"
+
+# Write to PostgreSQL using foreachBatch
+def write_to_postgres(batch_df, batch_id):
+    batch_df.write \
+        .format("jdbc") \
+        .option("url", POSTGRES_URL) \
+        .option("dbtable", "sensor_readings") \
+        .option("user", POSTGRES_USER) \
+        .option("password", POSTGRES_PASSWORD) \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("append") \
+        .save()
+
 query = status_df.writeStream \
-    .outputMode("append") \
-    .format("console") \
-    .option("truncate", "false") \
+    .outputMode("update") \
+    .foreachBatch(write_to_postgres) \
     .option("checkpointLocation", CHECKPOINT_DIR) \
     .start()
 

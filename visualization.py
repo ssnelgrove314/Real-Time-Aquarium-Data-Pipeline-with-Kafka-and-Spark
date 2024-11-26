@@ -27,7 +27,7 @@ data = load_data()
 
 # Data Overview
 st.write("### Data Overview")
-st.write(data.head())
+st.write(data.head(1000))
 
 # Plot temperature over time
 st.write("### Temperature Over Time")
